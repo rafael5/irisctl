@@ -88,13 +88,17 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # Lazy import to keep startup fast
     from irisctl.commands import alerts as cmd_alerts
+    from irisctl.commands import backup as cmd_backup
+    from irisctl.commands import config_cmd as cmd_config
     from irisctl.commands import exec_cmd as cmd_exec
     from irisctl.commands import health as cmd_health
     from irisctl.commands import license as cmd_license
+    from irisctl.commands import lifecycle as cmd_lifecycle
     from irisctl.commands import logs as cmd_logs
     from irisctl.commands import metrics as cmd_metrics
     from irisctl.commands import namespaces as cmd_namespaces
     from irisctl.commands import ports as cmd_ports
+    from irisctl.commands import restore as cmd_restore
     from irisctl.commands import shell as cmd_shell
     from irisctl.commands import source as cmd_source
     from irisctl.commands import sql as cmd_sql
@@ -257,6 +261,73 @@ def _build_parser() -> argparse.ArgumentParser:
             a.stdin_text = sys.stdin.read()
         return cmd_source.dispatch(a, prof)
     p_src.set_defaults(func=_source_run)
+
+    # ---- Phase 4: lifecycle ----
+    p = _sub("start", help="Start the container; wait for listeners")
+    p.add_argument("--wait-timeout", type=float, default=60.0,
+                   help="Seconds to wait for listeners (default 60)")
+    p.set_defaults(func=lambda a, prof: cmd_lifecycle.start_run(
+        prof, wait_timeout=a.wait_timeout))
+
+    p = _sub("stop", help="Stop the container (default 60s graceful timeout)")
+    p.add_argument("--timeout", type=int, default=60,
+                   help="Graceful shutdown timeout (default 60)")
+    p.set_defaults(func=lambda a, prof: cmd_lifecycle.stop_run(
+        prof, timeout=a.timeout))
+
+    p = _sub("restart", help="Stop + start (full cycle)")
+    p.add_argument("--timeout", type=int, default=60)
+    p.add_argument("--wait-timeout", type=float, default=60.0)
+    p.set_defaults(func=lambda a, prof: cmd_lifecycle.restart_run(
+        prof, timeout=a.timeout, wait_timeout=a.wait_timeout))
+
+    p = _sub("recreate", help="Remove + run from the host volume (destructive)")
+    p.add_argument("--image", default="foia:latest",
+                   help="Image to run from (default foia:latest)")
+    p.add_argument("--yes", action="store_true",
+                   help="Confirm; required to actually recreate")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print the planned argv without doing anything")
+    p.add_argument("--wait-timeout", type=float, default=90.0)
+    p.set_defaults(func=lambda a, prof: cmd_lifecycle.recreate_run(
+        prof, image=a.image, yes=a.yes, dry_run=a.dry_run,
+        wait_timeout=a.wait_timeout))
+
+    # ---- Phase 4: persistence ----
+    p = _sub("backup", help="Tar the host volume to a backup tarball")
+    p.add_argument("--to", type=Path, default=None,
+                   help="Output path (default ~/data/backups/foia-iris-<UTC>.tgz)")
+    p.add_argument("--offline", action="store_true",
+                   help="Stop the container during tar (slower, more consistent)")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=lambda a, prof: cmd_backup.run(
+        prof, to=a.to, online=not a.offline, dry_run=a.dry_run))
+
+    p = _sub("restore", help="Replace host volume from a backup tarball (destructive)")
+    p.add_argument("--from", dest="source", type=Path, required=True,
+                   help="Backup tarball to restore from")
+    p.add_argument("--yes", action="store_true",
+                   help="Confirm; required to actually wipe + restore")
+    p.add_argument("--dry-run", action="store_true")
+    p.set_defaults(func=lambda a, prof: cmd_restore.run(
+        prof, source=a.source, yes=a.yes, dry_run=a.dry_run))
+
+    # ---- Phase 4: config ----
+    p_cfg = _sub("config", help="Read or merge iris.cpf")
+    cfg_sub = p_cfg.add_subparsers(dest="config_sub", required=False,
+                                    metavar="ACTION")
+
+    p_show = cfg_sub.add_parser("show", parents=[globals_parent],
+                                help="Read iris.cpf via the host bind-mount")
+    p_show.set_defaults(config_sub="show")
+
+    p_merge = cfg_sub.add_parser("merge", parents=[globals_parent],
+                                  help="Apply a CPF fragment via `iris merge`")
+    p_merge.add_argument("file", help="CPF fragment to merge")
+    p_merge.add_argument("--dry-run", action="store_true")
+    p_merge.set_defaults(config_sub="merge")
+
+    p_cfg.set_defaults(func=lambda a, prof: cmd_config.dispatch(a, prof))
 
     return parser
 

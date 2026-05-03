@@ -6,8 +6,9 @@ heredocs, `iris session`, host-network helpers, license bookkeeping,
 HTTP probes, and CSP page paths behind a deterministic, JSON-first
 surface.
 
-This repo implements **Phases 1, 2, and 3** of the design — read-only
-floor, M/SQL execution, and source-code CRUD via Atelier.
+This repo implements **Phases 1–4** of the design — read-only
+floor, M/SQL execution, source-code CRUD via Atelier, and lifecycle +
+persistence (start/stop/restart/recreate, backup/restore, config show/merge).
 
 ## What's in here
 
@@ -175,6 +176,55 @@ $ irisctl source compile USER myroutine.mac
 {"v":1,"ok":true,"command":"source","data":{"namespace":"USER","compiled":1,"flags":"ck",...},"warnings":[]}
 ```
 
+### Phase 4 subcommands (lifecycle + persistence — mutating)
+
+| Command | Purpose | Mechanism |
+|---|---|---|
+| `irisctl start` | Start the container; wait for listeners | `docker start` + TCP probe |
+| `irisctl stop [--timeout 60]` | Graceful shutdown | `docker stop -t N` |
+| `irisctl restart` | Stop + start | composite |
+| `irisctl recreate --image I --yes` | Remove + run from host volume (destructive) | `docker rm` + `docker run` per [INSTALL_GUIDE](docs/iris-cli-surface.md) §8 |
+| `irisctl backup [--to PATH] [--offline]` | Tar host volume to a backup tarball | helper `alpine tar` |
+| `irisctl restore --from PATH --yes` | Replace host volume from tarball (destructive) | helper `alpine` wipe + untar |
+| `irisctl config show` | Read iris.cpf via host bind-mount | helper `alpine cat` |
+| `irisctl config merge FILE` | Apply CPF fragment via `iris merge` | `docker cp` + `docker exec iris merge` |
+
+Safety guardrails:
+
+- **`recreate` and `restore` require `--yes`** — they wipe Docker
+  state. Both also accept `--dry-run` to print the planned argv/steps.
+- **`backup` defaults to `--online`** (live tar, faster); pass
+  `--offline` for stop+tar+start consistency.
+- **`config merge` is the only safe CPF mutation path.** Direct edits
+  to a running `iris.cpf` get overwritten on shutdown.
+
+Full container cycles (real stop+start, real backup) are gated behind
+`@pytest.mark.slow` so default `make test` stays under 12s. Run them
+explicitly with `make test-slow` (~60-180s).
+
+Examples:
+
+```bash
+$ irisctl start --human
+container        foia
+already_running  yes
+listeners        {1972: True, 52773: True, 9430: True, 8001: True}
+
+$ irisctl config show --human | head -3
+path        /home/rafael/data/foia-iris/iris.cpf
+size_bytes  14135
+text        [ConfigFile]Product=IRIS...
+
+$ irisctl backup --to /tmp/snap.tgz --dry-run --human
+path     /tmp/snap.tgz
+online   yes
+dry_run  yes
+steps    ['# online=True; out=/tmp/snap.tgz', ..., 'docker run --rm --user 0 -v ... alpine tar czf ...']
+
+$ irisctl recreate --dry-run
+{"v":1,"ok":true,"command":"recreate","data":{"argv":["docker","run","--name","foia","-d","-v","/home/rafael/data/foia-iris/mgr:/usr/irissys/mgr",...]}}
+```
+
 ### Global flags (work before *or* after the subcommand)
 
 | Flag | Effect |
@@ -222,9 +272,15 @@ The `live_iris` pytest fixture is the readiness probe — tests marked
 
 ### Test totals
 
-After Phase 3: **168 passed + 8 skipped** (~9.8s). Skipped tests are
-auth-gated CRUD round-trips that need real credentials in
-`IRISCTL_AUTH_USER` + `IRISCTL_AUTH_PW`.
+After Phase 4: **198 passed + 8 skipped + 3 deselected** (~11.4s).
+
+- 8 skipped: auth-gated Atelier CRUD round-trips waiting on
+  `IRISCTL_AUTH_USER` + `IRISCTL_AUTH_PW`.
+- 3 deselected: full container stop+start+restore cycles (`@slow`).
+  Run with `make test-slow` (~60-180s) — they push coverage past 80%.
+
+Default coverage gate: 60% (slow tests would push it past 80%).
+Current line coverage with default suite: ~65%.
 
 ## Output contract
 
@@ -259,7 +315,7 @@ Stable error codes ↔ exit codes:
 | 1 | status, version, ports, logs, alerts, health, license, metrics | **shipped** |
 | 2 | exec, sql, shell | **shipped** |
 | 3 | namespaces, source list/get/put/delete/compile | **shipped** (search/diff deferred) |
-| 4 | start, stop, restart, recreate, backup, restore, config show/merge | not started |
+| 4 | start, stop, restart, recreate, backup, restore, config show/merge | **shipped** |
 | 5 | profiles, completion, JSON-RPC mode, pip distribution | not started |
 
 See [docs/iris-cli-plan.md](docs/iris-cli-plan.md) for the full proposal,

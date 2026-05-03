@@ -1,14 +1,16 @@
 """Docker CLI wrapper.
 
-Wraps `docker inspect` / `docker ps` / `docker run --rm --user 0` for
-the read-only operations Phase 1 needs. Shells out to the docker
-binary; no Python docker SDK dependency.
+Wraps `docker inspect` / `docker ps` / `docker start|stop|rm` plus the
+`docker run --rm --user 0` host-helper pattern. Shells out to the
+docker binary; no Python docker SDK dependency.
 """
 
 from __future__ import annotations
 
 import json
+import socket
 import subprocess
+import time
 from typing import Any
 
 
@@ -116,3 +118,97 @@ def tail_log_via_helper(host_path: str, tail: int = 200) -> str:
         "alpine", "tail", f"-n{tail}", host_path,
     ]
     return _run(cmd, timeout=30)
+
+
+def cat_file_via_helper(host_path: str) -> str:
+    """Read an entire file via a transient root-uid alpine container."""
+    cmd = [
+        "docker", "run", "--rm", "--user", "0",
+        "-v", f"{host_path}:{host_path}:ro",
+        "alpine", "cat", host_path,
+    ]
+    return _run(cmd, timeout=30)
+
+
+def start_container(name: str) -> None:
+    _run(["docker", "start", name], timeout=30)
+
+
+def stop_container(name: str, timeout: int = 60) -> None:
+    _run(["docker", "stop", "-t", str(timeout), name],
+         timeout=float(timeout) + 30)
+
+
+def remove_container(name: str, force: bool = False) -> None:
+    cmd = ["docker", "rm"]
+    if force:
+        cmd.append("-f")
+    cmd.append(name)
+    _run(cmd, timeout=30)
+
+
+def docker_exec(
+    name: str,
+    args: list[str],
+    *,
+    input_text: str | None = None,
+    timeout: float = 60.0,
+) -> str:
+    """Run `docker exec [-i] <name> <args...>` and return stdout.
+
+    Uses `-i` if input_text is provided so stdin is passed through.
+    """
+    cmd = ["docker", "exec"]
+    if input_text is not None:
+        cmd.append("-i")
+    cmd.extend([name, *args])
+    try:
+        res = subprocess.run(
+            cmd,
+            input=input_text,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as e:
+        raise DockerError(f"docker exec timeout: {' '.join(cmd[:5])}") from e
+    if res.returncode != 0:
+        raise DockerError(
+            f"docker exec exit {res.returncode}: "
+            f"{(res.stderr.strip() or res.stdout.strip())[:400]}"
+        )
+    return res.stdout
+
+
+def wait_for_tcp(host: str, ports: list[int], *, timeout: float = 60.0,
+                  interval: float = 0.5) -> dict[int, bool]:
+    """Poll until every port is open or timeout elapses.
+
+    Returns a dict mapping port → reachable? at the time of return.
+    """
+    deadline = time.monotonic() + timeout
+    state: dict[int, bool] = {p: False for p in ports}
+    while time.monotonic() < deadline:
+        for p in ports:
+            if state[p]:
+                continue
+            try:
+                with socket.create_connection((host, p), timeout=1.0):
+                    state[p] = True
+            except OSError:
+                pass
+        if all(state.values()):
+            return state
+        time.sleep(interval)
+    return state
+
+
+def cp_to_container(src_path: str, container: str, dest_path: str) -> None:
+    """`docker cp <src> <container>:<dest>`."""
+    _run(["docker", "cp", src_path, f"{container}:{dest_path}"], timeout=120)
+
+
+def cp_from_container(container: str, src_path: str, dest_path: str) -> None:
+    """`docker cp <container>:<src> <dest>`."""
+    _run(["docker", "cp", f"{container}:{src_path}", dest_path], timeout=120)

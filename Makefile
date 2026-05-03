@@ -24,7 +24,10 @@ test-unit:
 	$(PYTEST) -m 'not integration'
 
 test-int:
-	$(PYTEST) -m integration
+	$(PYTEST) -m 'integration and not slow'
+
+test-slow:
+	$(PYTEST) -m slow
 
 watch:
 	$(PTW) -- --tb=short

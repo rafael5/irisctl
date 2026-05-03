@@ -175,3 +175,60 @@ class TestEndToEndPhase3:
         assert proc.returncode == 2
         env = json.loads(proc.stdout)
         assert env["error"]["code"] == "usage"
+
+
+@pytest.mark.integration
+class TestEndToEndPhase4:
+    def test_start_when_running_is_noop(self, live_iris):
+        env = _cli("start")
+        assert env["ok"] is True
+        assert env["data"]["already_running"] is True
+
+    def test_recreate_dry_run(self, live_iris):
+        env = _cli("recreate", "--dry-run")
+        assert env["ok"] is True
+        assert env["data"]["dry_run"] is True
+        assert "argv" in env["data"]
+
+    def test_recreate_without_yes_returns_usage(self, live_iris):
+        proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "recreate"],
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(SRC)},
+            timeout=30,
+        )
+        assert proc.returncode == 2
+        env = json.loads(proc.stdout)
+        assert env["error"]["code"] == "usage"
+
+    def test_config_show(self, live_iris):
+        env = _cli("config", "show")
+        assert env["ok"] is True
+        assert "[" in env["data"]["text"]
+        assert env["data"]["size_bytes"] > 100
+
+    def test_config_merge_dry_run(self, live_iris, tmp_path):
+        f = tmp_path / "frag.cpf"
+        f.write_text("[Defaults]\nFakeKey=42\n", encoding="utf-8")
+        env = _cli("config", "merge", str(f), "--dry-run")
+        assert env["ok"] is True
+        assert env["data"]["dry_run"] is True
+
+    def test_backup_dry_run(self, live_iris, tmp_path):
+        out = tmp_path / "test.tgz"
+        env = _cli("backup", "--to", str(out), "--dry-run")
+        assert env["ok"] is True
+        assert env["data"]["dry_run"] is True
+
+    def test_restore_without_yes_returns_usage(self, live_iris, tmp_path):
+        f = tmp_path / "fake.tgz"
+        f.write_bytes(b"x")
+        proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "restore", "--from", str(f)],
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(SRC)},
+            timeout=30,
+        )
+        assert proc.returncode == 2
+        env = json.loads(proc.stdout)
+        assert env["error"]["code"] == "usage"

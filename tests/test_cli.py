@@ -60,6 +60,10 @@ class TestUsage:
         # Phase 3
         for known in ("namespaces", "source"):
             assert known in res.stdout
+        # Phase 4
+        for known in ("start", "stop", "restart", "recreate",
+                      "backup", "restore", "config"):
+            assert known in res.stdout
 
 
 class TestGlobalFlags:
