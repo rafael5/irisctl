@@ -64,6 +64,9 @@ class TestUsage:
         for known in ("start", "stop", "restart", "recreate",
                       "backup", "restore", "config"):
             assert known in res.stdout
+        # Phase 5
+        for known in ("which", "portal", "docs", "rpc"):
+            assert known in res.stdout
 
 
 class TestGlobalFlags:

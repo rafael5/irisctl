@@ -19,6 +19,7 @@ import argparse
 import logging
 import sys
 from pathlib import Path
+from types import ModuleType
 from typing import Any, Callable
 
 from irisctl import __version__
@@ -30,6 +31,14 @@ from irisctl.output import (
     render_human,
     render_json,
 )
+from irisctl.watch import watch_loop
+
+argcomplete: ModuleType | None
+try:
+    import argcomplete as _argcomplete  # noqa: I001
+    argcomplete = _argcomplete
+except ImportError:  # pragma: no cover — optional UX dep
+    argcomplete = None
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +99,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from irisctl.commands import alerts as cmd_alerts
     from irisctl.commands import backup as cmd_backup
     from irisctl.commands import config_cmd as cmd_config
+    from irisctl.commands import docs as cmd_docs
     from irisctl.commands import exec_cmd as cmd_exec
     from irisctl.commands import health as cmd_health
     from irisctl.commands import license as cmd_license
@@ -97,6 +107,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from irisctl.commands import logs as cmd_logs
     from irisctl.commands import metrics as cmd_metrics
     from irisctl.commands import namespaces as cmd_namespaces
+    from irisctl.commands import portal as cmd_portal
     from irisctl.commands import ports as cmd_ports
     from irisctl.commands import restore as cmd_restore
     from irisctl.commands import shell as cmd_shell
@@ -104,6 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
     from irisctl.commands import sql as cmd_sql
     from irisctl.commands import status as cmd_status
     from irisctl.commands import version as cmd_version
+    from irisctl.commands import which as cmd_which
 
     def _sub(name: str, **kw):
         p = sub.add_parser(name, parents=[globals_parent], **kw)
@@ -111,7 +123,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # license
     p = _sub("license", help="Current license-unit consumption")
-    p.set_defaults(func=lambda a, prof: cmd_license.run(prof))
+    p.add_argument("--watch", action="store_true",
+                   help="Poll repeatedly until interrupted")
+    p.add_argument("--interval", type=float, default=5.0,
+                   help="Watch interval seconds (default 5)")
+    p.set_defaults(func=lambda a, prof: _maybe_watch(
+        a, prof, lambda: cmd_license.run(prof)))
 
     # metrics
     p = _sub("metrics", help="Read /api/monitor/metrics counters")
@@ -147,7 +164,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # status
     p = _sub("status", help="Composite container + listener + license check")
-    p.set_defaults(func=lambda a, prof: cmd_status.run(prof))
+    p.add_argument("--watch", action="store_true",
+                   help="Poll repeatedly until interrupted")
+    p.add_argument("--interval", type=float, default=5.0,
+                   help="Watch interval seconds (default 5)")
+    p.set_defaults(func=lambda a, prof: _maybe_watch(
+        a, prof, lambda: cmd_status.run(prof)))
 
     # health
     p = _sub("health", help="Composite health verdict (status + ports + alerts)")
@@ -329,11 +351,69 @@ def _build_parser() -> argparse.ArgumentParser:
 
     p_cfg.set_defaults(func=lambda a, prof: cmd_config.dispatch(a, prof))
 
+    # ---- Phase 5: convenience ----
+    p = _sub("which", help="Explain the underlying mechanism for an op")
+    p.add_argument("op", nargs="?", default=None,
+                   help="Operation name (omit to list all)")
+    p.set_defaults(func=lambda a, prof: cmd_which.run(prof, op=a.op))
+
+    p = _sub("portal", help="Open the Mgmt Portal in your default browser")
+    p.add_argument("path", nargs="?", default=None,
+                   help="CSP path (default UtilHome.csp)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print the URL instead of opening it")
+    p.set_defaults(func=lambda a, prof: cmd_portal.run(
+        prof, path=a.path, dry_run=a.dry_run))
+
+    p = _sub("docs", help="Open an InterSystems docs page by KEY")
+    p.add_argument("key", nargs="?", default=None,
+                   help="DocBook KEY (e.g. ADOCK, GCM_rest)")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print the URL instead of opening it")
+    p.set_defaults(func=lambda a, prof: cmd_docs.run(
+        prof, key=a.key, dry_run=a.dry_run))
+
+    p = _sub("rpc", help="JSON-RPC 2.0 single-process mode "
+                          "(stdin requests / stdout responses)")
+    p.set_defaults(func=lambda a, prof: _rpc_dispatch(prof))
+
     return parser
+
+
+def _maybe_watch(args, profile, runner):
+    """If --watch was passed, run the poll loop; else execute once."""
+    if not getattr(args, "watch", False):
+        return runner()
+    interval = getattr(args, "interval", 5.0)
+    last = watch_loop(
+        runner,
+        interval=interval,
+        out=sys.stdout,
+        render="human" if getattr(args, "human", False) else "json",
+        pretty=getattr(args, "pretty", False),
+    )
+    # _emit() in main() will render this once more — return a synthetic
+    # envelope so it doesn't double-print. Use a benign success.
+    return last if last is not None else runner()
+
+
+def _rpc_dispatch(profile):
+    """Run the JSON-RPC server loop and return a sentinel envelope.
+
+    The loop writes responses directly to stdout; main() must skip
+    its own _emit() rendering when this returns.
+    """
+    from irisctl.rpc import serve
+    serve(profile)
+    # Return a sentinel envelope main() can detect to suppress emission
+    return {"v": 1, "ok": True, "command": "rpc",
+            "data": None, "warnings": [], "_skip_emit": True}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = _build_parser()
+    if argcomplete is not None:
+        argcomplete.autocomplete(parser)
     args = parser.parse_args(argv)
     # SUPPRESS-defaults: backfill the runtime defaults here.
     args.profile = getattr(args, "profile", None)
@@ -356,6 +436,9 @@ def main(argv: list[str] | None = None) -> int:
             code=ErrorCode.INTERNAL,
             message=f"{type(e).__name__}: {e}",
         )
+    # rpc / watch already wrote to stdout — skip re-emission
+    if envelope.get("_skip_emit"):
+        return exit_code_for(ErrorCode.OK)
     return _emit(envelope, args=args)
 
 

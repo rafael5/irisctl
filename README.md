@@ -6,9 +6,9 @@ heredocs, `iris session`, host-network helpers, license bookkeeping,
 HTTP probes, and CSP page paths behind a deterministic, JSON-first
 surface.
 
-This repo implements **Phases 1–4** of the design — read-only
-floor, M/SQL execution, source-code CRUD via Atelier, and lifecycle +
-persistence (start/stop/restart/recreate, backup/restore, config show/merge).
+This repo implements **Phases 1–5** of the design — read-only
+floor, M/SQL execution, source-code CRUD via Atelier, lifecycle +
+persistence, and convenience + JSON-RPC mode for AI agents.
 
 ## What's in here
 
@@ -225,6 +225,42 @@ $ irisctl recreate --dry-run
 {"v":1,"ok":true,"command":"recreate","data":{"argv":["docker","run","--name","foia","-d","-v","/home/rafael/data/foia-iris/mgr:/usr/irissys/mgr",...]}}
 ```
 
+### Phase 5 subcommands (convenience + AI-friendly modes)
+
+| Command | Purpose | Notes |
+|---|---|---|
+| `irisctl which [OP]` | Explain the underlying docker / HTTP / iris-session command for any op | Debug + discovery aid; lists all if no OP |
+| `irisctl portal [PATH]` | Open Mgmt Portal in the default browser (`/csp/sys/PATH`) | `--dry-run` prints the URL |
+| `irisctl docs KEY` | Open InterSystems docs page for KEY (e.g. `ADOCK`, `GCM_rest`) | `--dry-run` prints the URL |
+| `irisctl rpc` | JSON-RPC 2.0 server on stdin/stdout | One persistent process for AI agents |
+| `irisctl status --watch [--interval N]` | Repoll status until interrupted | Default 5s; Ctrl-C exits cleanly |
+| `irisctl license --watch [--interval N]` | Repoll license until interrupted | Default 5s |
+| Shell completion | argcomplete-driven bash/zsh/fish | `eval "$(register-python-argcomplete irisctl)"` |
+
+### JSON-RPC mode for AI agents
+
+`irisctl rpc` is the load-bearing Phase 5 feature for AI use. Instead
+of spawning ~28 distinct CLI processes (each paying argparse +
+config-load startup cost), an agent pipes newline-delimited JSON-RPC
+2.0 requests in and reads responses out:
+
+```bash
+$ printf '%s\n%s\n' \
+    '{"jsonrpc":"2.0","method":"license","id":1}' \
+    '{"jsonrpc":"2.0","method":"which","params":{"op":"exec"},"id":2}' \
+  | irisctl rpc
+{"jsonrpc":"2.0","id":1,"result":{"v":1,"ok":true,"command":"license","data":{"consumed":1,"available":7,"cap":8,"percent_used":13,"days_remaining":327},"warnings":[]}}
+{"jsonrpc":"2.0","id":2,"result":{"v":1,"ok":true,"command":"which","data":{"op":"exec","mechanism":"docker exec -i + iris session heredoc (HALT-injected)","underlying":"docker exec -i foia iris session IRIS -U <ns> ...","lu_cost":1},"warnings":[]}}
+```
+
+All Phase 1–5 commands are exposed as RPC methods (~30 total) — see
+the registry in [src/irisctl/rpc.py](src/irisctl/rpc.py) `METHODS`.
+Standard JSON-RPC 2.0 error codes apply: `-32700` parse error,
+`-32600` invalid request, `-32601` method not found, `-32602` invalid
+params, `-32603` internal error. Notifications (no `id`) get no
+response. The body of every successful `result` is the same JSON
+envelope produced by the corresponding CLI subcommand.
+
 ### Global flags (work before *or* after the subcommand)
 
 | Flag | Effect |
@@ -272,15 +308,14 @@ The `live_iris` pytest fixture is the readiness probe — tests marked
 
 ### Test totals
 
-After Phase 4: **198 passed + 8 skipped + 3 deselected** (~11.4s).
+After Phase 5: **233 passed + 8 skipped + 3 deselected** (~12s).
 
 - 8 skipped: auth-gated Atelier CRUD round-trips waiting on
   `IRISCTL_AUTH_USER` + `IRISCTL_AUTH_PW`.
 - 3 deselected: full container stop+start+restore cycles (`@slow`).
-  Run with `make test-slow` (~60-180s) — they push coverage past 80%.
+  Run with `make test-slow` (~60-180s).
 
 Default coverage gate: 60% (slow tests would push it past 80%).
-Current line coverage with default suite: ~65%.
 
 ## Output contract
 
@@ -316,7 +351,7 @@ Stable error codes ↔ exit codes:
 | 2 | exec, sql, shell | **shipped** |
 | 3 | namespaces, source list/get/put/delete/compile | **shipped** (search/diff deferred) |
 | 4 | start, stop, restart, recreate, backup, restore, config show/merge | **shipped** |
-| 5 | profiles, completion, JSON-RPC mode, pip distribution | not started |
+| 5 | which, portal, docs, --watch, JSON-RPC, shell completion | **shipped** (pipx packaging skipped) |
 
 See [docs/iris-cli-plan.md](docs/iris-cli-plan.md) for the full proposal,
 including the per-phase LOC estimates and the cross-tool design

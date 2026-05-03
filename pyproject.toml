@@ -9,6 +9,7 @@ description = "Programmer/AI-friendly CLI for InterSystems IRIS Community Editio
 requires-python = ">=3.12"
 dependencies = [
     "httpx>=0.27",
+    "argcomplete>=3.5",
 ]
 
 [project.scripts]
