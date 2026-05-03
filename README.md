@@ -6,8 +6,8 @@ heredocs, `iris session`, host-network helpers, license bookkeeping,
 HTTP probes, and CSP page paths behind a deterministic, JSON-first
 surface.
 
-This repo implements **Phase 1** (read-only floor) **and Phase 2**
-(M / SQL execution) of the design.
+This repo implements **Phases 1, 2, and 3** of the design — read-only
+floor, M/SQL execution, and source-code CRUD via Atelier.
 
 ## What's in here
 
@@ -122,6 +122,59 @@ argv       ['docker', 'exec', '-it', 'foia', 'iris', 'session', 'IRIS', '-U', '%
 license    {'consumed': 1, 'available': 7, 'cap': 8}
 ```
 
+### Phase 3 subcommands (Atelier source CRUD — auth-gated)
+
+| Command | Purpose | Mechanism |
+|---|---|---|
+| `irisctl namespaces` | List IRIS namespaces + Atelier version | `GET /api/atelier/v6/` |
+| `irisctl source list <NS> [pattern]` | List documents (routines + classes) | `GET /api/atelier/v6/<ns>/docnames` |
+| `irisctl source get <NS> <doc>` | Read source content | `GET /api/atelier/v6/<ns>/doc/<doc>` |
+| `irisctl source put <NS> <doc> [--file F \| --stdin]` | Upsert a document | `PUT /api/atelier/v6/<ns>/doc/<doc>` |
+| `irisctl source delete <NS> <doc>` | Delete a document | `DELETE /api/atelier/v6/<ns>/doc/<doc>` |
+| `irisctl source compile <NS> <doc...>` | Compile listed documents | `POST /api/atelier/v6/<ns>/action/compile` |
+
+The Atelier API is auth-gated. Credentials resolve in this order:
+
+1. `IRISCTL_AUTH_USER` + `IRISCTL_AUTH_PW` (direct env vars).
+2. `IRISCTL_AUTH_USER` + `IRISCTL_AUTH_PW_ENV` (indirection — the
+   second env var names a *third* env var holding the password,
+   so passwords don't appear in shell history).
+3. `auth_user` / `auth_pw_env` from the active TOML profile.
+
+When none resolve, every Phase 3 subcommand returns `auth_required`
+(exit code 5). When creds resolve but IRIS rejects them, the error is
+`auth_failed` (also exit code 5).
+
+The Atelier version segment is auto-probed once per session (v6 → v1)
+and cached on the client, so `source` calls don't pay the discovery
+cost more than once.
+
+Examples:
+
+```bash
+$ export IRISCTL_AUTH_USER=_SYSTEM
+$ export IRISCTL_AUTH_PW='your-password-here'
+
+$ irisctl namespaces --human
+atelier_version  v6
+server           IRIS for UNIX...
+instance         3b6beebe6e2f
+namespaces       ['%SYS', 'USER', 'VISTA', ...]
+
+$ irisctl source list USER --human
+namespace        USER
+atelier_version  v6
+docs             [{...}, ...]
+count            42
+
+$ echo 'myroutine ; demo' '\n' ' W "hello",!' '\n' ' Q' \
+    | irisctl source put USER myroutine.mac --stdin
+{"v":1,"ok":true,"command":"source","data":{"namespace":"USER","name":"myroutine.mac","lines_written":3},"warnings":[]}
+
+$ irisctl source compile USER myroutine.mac
+{"v":1,"ok":true,"command":"source","data":{"namespace":"USER","compiled":1,"flags":"ck",...},"warnings":[]}
+```
+
 ### Global flags (work before *or* after the subcommand)
 
 | Flag | Effect |
@@ -169,7 +222,9 @@ The `live_iris` pytest fixture is the readiness probe — tests marked
 
 ### Test totals
 
-After Phase 2: **140 tests, ~8.3s wall-clock**, 76% line coverage.
+After Phase 3: **168 passed + 8 skipped** (~9.8s). Skipped tests are
+auth-gated CRUD round-trips that need real credentials in
+`IRISCTL_AUTH_USER` + `IRISCTL_AUTH_PW`.
 
 ## Output contract
 
@@ -203,7 +258,7 @@ Stable error codes ↔ exit codes:
 |---|---|---|
 | 1 | status, version, ports, logs, alerts, health, license, metrics | **shipped** |
 | 2 | exec, sql, shell | **shipped** |
-| 3 | source list/get/put/delete/compile/search/diff, namespaces | not started |
+| 3 | namespaces, source list/get/put/delete/compile | **shipped** (search/diff deferred) |
 | 4 | start, stop, restart, recreate, backup, restore, config show/merge | not started |
 | 5 | profiles, completion, JSON-RPC mode, pip distribution | not started |
 

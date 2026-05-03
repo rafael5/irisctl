@@ -35,6 +35,27 @@ class Profile:
     def messages_log_path(self) -> Path:
         return self.data_dir / "mgr" / "messages.log"
 
+    def resolve_auth(self) -> tuple[str, str] | None:
+        """Resolve a (user, password) tuple, or None if not configured.
+
+        Resolution order:
+        1. IRISCTL_AUTH_USER + IRISCTL_AUTH_PW (direct).
+        2. self.auth_user (from TOML or env) + IRISCTL_AUTH_PW.
+        3. self.auth_user + env var named by self.auth_pw_env.
+        """
+        user = os.environ.get("IRISCTL_AUTH_USER") or self.auth_user
+        if not user:
+            return None
+        pw = os.environ.get("IRISCTL_AUTH_PW")
+        if pw:
+            return (user, pw)
+        pw_env = os.environ.get("IRISCTL_AUTH_PW_ENV") or self.auth_pw_env
+        if pw_env:
+            pw = os.environ.get(pw_env)
+            if pw:
+                return (user, pw)
+        return None
+
 
 _DEFAULTS: dict[str, object] = {
     "container": "foia",
@@ -80,6 +101,10 @@ def load_profile(
         merged["superserver_port"] = int(v)
     if v := os.environ.get("IRISCTL_DATA_DIR"):
         merged["data_dir"] = v
+    if v := os.environ.get("IRISCTL_AUTH_USER"):
+        merged["auth_user"] = v
+    if v := os.environ.get("IRISCTL_AUTH_PW_ENV"):
+        merged["auth_pw_env"] = v
 
     return Profile(
         container=str(merged["container"]),

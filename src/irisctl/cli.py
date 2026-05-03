@@ -93,8 +93,10 @@ def _build_parser() -> argparse.ArgumentParser:
     from irisctl.commands import license as cmd_license
     from irisctl.commands import logs as cmd_logs
     from irisctl.commands import metrics as cmd_metrics
+    from irisctl.commands import namespaces as cmd_namespaces
     from irisctl.commands import ports as cmd_ports
     from irisctl.commands import shell as cmd_shell
+    from irisctl.commands import source as cmd_source
     from irisctl.commands import sql as cmd_sql
     from irisctl.commands import status as cmd_status
     from irisctl.commands import version as cmd_version
@@ -203,6 +205,58 @@ def _build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=lambda a, prof: cmd_shell.run(
         prof, namespace=a.ns, force=a.force, dry_run=a.dry_run,
     ))
+
+    # namespaces — Phase 3
+    p = _sub("namespaces", help="List IRIS namespaces (Atelier GetServer)")
+    p.set_defaults(func=lambda a, prof: cmd_namespaces.run(prof))
+
+    # source — Phase 3 (sub-verbs)
+    p_src = _sub("source", help="Source-code CRUD via Atelier")
+    src_sub = p_src.add_subparsers(dest="source_sub", required=False,
+                                   metavar="ACTION")
+
+    p_list = src_sub.add_parser("list", parents=[globals_parent],
+                                help="List documents in a namespace")
+    p_list.add_argument("namespace")
+    p_list.add_argument("pattern", nargs="?", default=None,
+                        help="Filter pattern (Atelier filter syntax)")
+    p_list.add_argument("--type", default=None,
+                        help="Document type filter (e.g. CLS, MAC, INT)")
+    p_list.set_defaults(source_sub="list")
+
+    p_get = src_sub.add_parser("get", parents=[globals_parent],
+                               help="Get a document's source")
+    p_get.add_argument("namespace")
+    p_get.add_argument("doc")
+    p_get.set_defaults(source_sub="get")
+
+    p_put = src_sub.add_parser("put", parents=[globals_parent],
+                               help="Upsert a document (file or stdin)")
+    p_put.add_argument("namespace")
+    p_put.add_argument("doc")
+    p_put.add_argument("--file", type=Path, default=None)
+    p_put.add_argument("--stdin", action="store_true",
+                       help="Read content from stdin")
+    p_put.set_defaults(source_sub="put")
+
+    p_del = src_sub.add_parser("delete", parents=[globals_parent],
+                               help="Delete a document")
+    p_del.add_argument("namespace")
+    p_del.add_argument("doc")
+    p_del.set_defaults(source_sub="delete")
+
+    p_comp = src_sub.add_parser("compile", parents=[globals_parent],
+                                help="Compile one or more documents")
+    p_comp.add_argument("namespace")
+    p_comp.add_argument("docs", nargs="+", help="One or more doc names")
+    p_comp.add_argument("--flags", default="ck", help="Compile flags (default ck)")
+    p_comp.set_defaults(source_sub="compile")
+
+    def _source_run(a, prof):
+        if getattr(a, "source_sub", None) == "put" and a.stdin:
+            a.stdin_text = sys.stdin.read()
+        return cmd_source.dispatch(a, prof)
+    p_src.set_defaults(func=_source_run)
 
     return parser
 

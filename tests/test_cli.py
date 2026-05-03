@@ -57,6 +57,9 @@ class TestUsage:
         # Phase 2
         for known in ("exec", "sql", "shell"):
             assert known in res.stdout
+        # Phase 3
+        for known in ("namespaces", "source"):
+            assert known in res.stdout
 
 
 class TestGlobalFlags:

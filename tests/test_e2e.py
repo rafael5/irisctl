@@ -133,3 +133,45 @@ class TestEndToEndPhase2:
         assert env["ok"] is True
         assert env["data"]["argv"][0] == "docker"
         assert "iris" in env["data"]["argv"]
+
+
+@pytest.mark.integration
+class TestEndToEndPhase3:
+    def test_namespaces_without_creds_returns_auth_required(self, live_iris):
+        # Don't pass creds via env — exit code 5 (auth_required)
+        env_strip = {**os.environ, "PYTHONPATH": str(SRC)}
+        for k in ("IRISCTL_AUTH_USER", "IRISCTL_AUTH_PW",
+                  "IRISCTL_AUTH_PW_ENV"):
+            env_strip.pop(k, None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "namespaces"],
+            capture_output=True, text=True, env=env_strip, timeout=30,
+        )
+        assert proc.returncode == 5
+        env = json.loads(proc.stdout)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "auth_required"
+
+    def test_source_list_without_creds(self, live_iris):
+        env_strip = {**os.environ, "PYTHONPATH": str(SRC)}
+        for k in ("IRISCTL_AUTH_USER", "IRISCTL_AUTH_PW",
+                  "IRISCTL_AUTH_PW_ENV"):
+            env_strip.pop(k, None)
+        proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "source", "list", "USER"],
+            capture_output=True, text=True, env=env_strip, timeout=30,
+        )
+        assert proc.returncode == 5
+        env = json.loads(proc.stdout)
+        assert env["error"]["code"] == "auth_required"
+
+    def test_source_no_subverb_returns_usage(self, live_iris):
+        proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "source"],
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(SRC)},
+            timeout=30,
+        )
+        assert proc.returncode == 2
+        env = json.loads(proc.stdout)
+        assert env["error"]["code"] == "usage"
