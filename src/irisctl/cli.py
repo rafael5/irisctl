@@ -18,6 +18,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 from typing import Any, Callable
 
 from irisctl import __version__
@@ -86,30 +87,17 @@ def _build_parser() -> argparse.ArgumentParser:
     sub = parser.add_subparsers(dest="command", required=True, metavar="COMMAND")
 
     # Lazy import to keep startup fast
-    from irisctl.commands import (
-        alerts as cmd_alerts,
-    )
-    from irisctl.commands import (
-        health as cmd_health,
-    )
-    from irisctl.commands import (
-        license as cmd_license,
-    )
-    from irisctl.commands import (
-        logs as cmd_logs,
-    )
-    from irisctl.commands import (
-        metrics as cmd_metrics,
-    )
-    from irisctl.commands import (
-        ports as cmd_ports,
-    )
-    from irisctl.commands import (
-        status as cmd_status,
-    )
-    from irisctl.commands import (
-        version as cmd_version,
-    )
+    from irisctl.commands import alerts as cmd_alerts
+    from irisctl.commands import exec_cmd as cmd_exec
+    from irisctl.commands import health as cmd_health
+    from irisctl.commands import license as cmd_license
+    from irisctl.commands import logs as cmd_logs
+    from irisctl.commands import metrics as cmd_metrics
+    from irisctl.commands import ports as cmd_ports
+    from irisctl.commands import shell as cmd_shell
+    from irisctl.commands import sql as cmd_sql
+    from irisctl.commands import status as cmd_status
+    from irisctl.commands import version as cmd_version
 
     def _sub(name: str, **kw):
         p = sub.add_parser(name, parents=[globals_parent], **kw)
@@ -158,6 +146,63 @@ def _build_parser() -> argparse.ArgumentParser:
     # health
     p = _sub("health", help="Composite health verdict (status + ports + alerts)")
     p.set_defaults(func=lambda a, prof: cmd_health.run(prof))
+
+    # exec — Phase 2
+    p = _sub("exec", help="Run ObjectScript via iris session (1 LU per call)")
+    p.add_argument("script", nargs="?", default=None,
+                   help="Inline ObjectScript (omit when using --file or --stdin)")
+    p.add_argument("--ns", "--namespace", dest="ns", default="%SYS",
+                   help="IRIS namespace (default: %%SYS)")
+    p.add_argument("--file", type=Path, default=None,
+                   help="Read script from a file")
+    p.add_argument("--stdin", action="store_true",
+                   help="Read script from standard input")
+    p.add_argument("--force", action="store_true",
+                   help="Skip the license pre-check")
+    p.add_argument("--timeout", type=float, default=60.0,
+                   help="Subprocess timeout in seconds (default 60)")
+    p.set_defaults(func=lambda a, prof: cmd_exec.run(
+        prof,
+        namespace=a.ns,
+        script=a.script,
+        stdin_text=sys.stdin.read() if a.stdin else None,
+        file=a.file,
+        force=a.force,
+        timeout=a.timeout,
+    ))
+
+    # sql — Phase 2
+    p = _sub("sql", help="Run a SQL statement, return rows as JSON (1 LU per call)")
+    p.add_argument("statement", nargs="?", default=None,
+                   help="Inline SQL (omit when using --file)")
+    p.add_argument("--ns", "--namespace", dest="ns", default="USER",
+                   help="IRIS namespace (default: USER)")
+    p.add_argument("--file", type=Path, default=None,
+                   help="Read SQL from a file")
+    p.add_argument("--force", action="store_true",
+                   help="Skip the license pre-check")
+    p.add_argument("--timeout", type=float, default=60.0,
+                   help="Subprocess timeout in seconds (default 60)")
+    p.set_defaults(func=lambda a, prof: cmd_sql.run(
+        prof,
+        namespace=a.ns,
+        statement=a.statement,
+        file=a.file,
+        force=a.force,
+        timeout=a.timeout,
+    ))
+
+    # shell — Phase 2 (replaces process; --dry-run for inspection)
+    p = _sub("shell", help="Open an interactive iris session (consumes 1 LU)")
+    p.add_argument("--ns", "--namespace", dest="ns", default="%SYS",
+                   help="IRIS namespace (default: %%SYS)")
+    p.add_argument("--force", action="store_true",
+                   help="Bypass the license pre-check")
+    p.add_argument("--dry-run", action="store_true",
+                   help="Print the docker-exec argv instead of execing")
+    p.set_defaults(func=lambda a, prof: cmd_shell.run(
+        prof, namespace=a.ns, force=a.force, dry_run=a.dry_run,
+    ))
 
     return parser
 

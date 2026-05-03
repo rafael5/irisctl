@@ -6,8 +6,8 @@ heredocs, `iris session`, host-network helpers, license bookkeeping,
 HTTP probes, and CSP page paths behind a deterministic, JSON-first
 surface.
 
-This repo implements **Phase 1** of the design — the read-only floor:
-no LU consumption, no auth required.
+This repo implements **Phase 1** (read-only floor) **and Phase 2**
+(M / SQL execution) of the design.
 
 ## What's in here
 
@@ -65,7 +65,7 @@ $ irisctl --pretty health
 }
 ```
 
-### Phase 1 subcommands (all implemented + tested)
+### Phase 1 subcommands (read-only, no LU consumed)
 
 | Command | Purpose | Mechanism |
 |---|---|---|
@@ -79,6 +79,48 @@ $ irisctl --pretty health
 | `irisctl logs [--tail N]` | Tail messages.log via root helper | `docker run alpine tail` |
 | `irisctl status` | Composite container + listeners + license | aggregates the above |
 | `irisctl health` | Green/yellow verdict with check breakdown | aggregates status + alerts |
+
+### Phase 2 subcommands (1 LU per call, license-aware)
+
+| Command | Purpose | Mechanism |
+|---|---|---|
+| `irisctl exec '<code>'` | Run ObjectScript via `iris session` heredoc | `docker exec -i ... iris session IRIS -U <ns>` |
+| `irisctl exec --stdin` | Read script from stdin | same |
+| `irisctl exec --file PATH` | Read script from a host file | same |
+| `irisctl sql '<sql>'` | Run SQL, return rows as structured JSON | wraps `%SQL.Statement` |
+| `irisctl sql --file PATH` | Read SQL from a host file | same |
+| `irisctl shell [--ns NS]` | Interactive `iris session` proxy | `os.execvp` into `docker exec -it` |
+| `irisctl shell --dry-run` | Print the docker-exec argv instead of execing | (no LU consumed) |
+
+Phase 2 commands share three guarantees:
+
+1. **License pre-check** — refuses near the cap (`available - 1 < reserve=1`)
+   unless `--force` is given. Output: `license_exhausted` error envelope, exit code 4.
+2. **HALT injection** — every script gets a trailing `HALT` if missing,
+   and trailing `QUIT`/`Q` is replaced with `HALT`. Avoids the
+   classic "QUIT only exits the current frame" hang.
+3. **License-retry on `<LICENSE LIMIT EXCEEDED>`** — one automatic
+   retry after a 1-second pause, in case the metrics endpoint hadn't
+   caught up to live LU state.
+
+Examples:
+
+```bash
+$ irisctl exec --ns %SYS 'W $ZV,!' --human
+namespace  %SYS
+output     IRIS for UNIX (Ubuntu Server LTS for x86-64 Containers) 2026.1 ...
+
+$ irisctl sql --ns USER 'SELECT 1+1 AS two' --human
+namespace  USER
+columns    ['two']
+rows       [{'two': '2'}]
+rowcount   1
+
+$ irisctl shell --dry-run --human
+namespace  %SYS
+argv       ['docker', 'exec', '-it', 'foia', 'iris', 'session', 'IRIS', '-U', '%SYS']
+license    {'consumed': 1, 'available': 7, 'cap': 8}
+```
 
 ### Global flags (work before *or* after the subcommand)
 
@@ -125,24 +167,9 @@ make check        # lint + mypy + cov (full gate)
 The `live_iris` pytest fixture is the readiness probe — tests marked
 `@pytest.mark.integration` skip cleanly if the container isn't up.
 
-### Coverage today
+### Test totals
 
-| Module | Statements | Coverage |
-|---|---:|---:|
-| `output.py` | 84 | 92% |
-| `http_api.py` | 102 | 82% |
-| `docker_api.py` | 64 | 81% |
-| `config.py` | 48 | 96% |
-| `commands/license.py` | 19 | 100% |
-| `commands/metrics.py` | 41 | 90% |
-| `commands/alerts.py` | 13 | 100% |
-| `commands/version.py` | 14 | 86% |
-| `commands/ports.py` | 33 | 82% |
-| `commands/logs.py` | 13 | 85% |
-| `commands/status.py` | 47 | 81% |
-| `commands/health.py` | 28 | 100% |
-| `cli.py` | 83 | (covered via e2e subprocess tests) |
-| **TOTAL** | **599** | **75%** |
+After Phase 2: **140 tests, ~8.3s wall-clock**, 76% line coverage.
 
 ## Output contract
 
@@ -175,7 +202,7 @@ Stable error codes ↔ exit codes:
 | Phase | Subcommands | Status |
 |---|---|---|
 | 1 | status, version, ports, logs, alerts, health, license, metrics | **shipped** |
-| 2 | exec, sql, shell | not started |
+| 2 | exec, sql, shell | **shipped** |
 | 3 | source list/get/put/delete/compile/search/diff, namespaces | not started |
 | 4 | start, stop, restart, recreate, backup, restore, config show/merge | not started |
 | 5 | profiles, completion, JSON-RPC mode, pip distribution | not started |

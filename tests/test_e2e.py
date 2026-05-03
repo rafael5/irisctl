@@ -86,3 +86,50 @@ class TestEndToEnd:
         env = _cli("health")
         assert env["ok"] is True
         assert env["data"]["verdict"] in ("green", "yellow")
+
+
+@pytest.mark.integration
+class TestEndToEndPhase2:
+    def test_exec_inline(self, live_iris):
+        env = _cli("exec", "--ns", "%SYS", 'W "irisctl-e2e-exec",!')
+        assert env["ok"] is True
+        assert "irisctl-e2e-exec" in env["data"]["output"]
+
+    def test_exec_stdin(self, live_iris):
+        # Pipe ObjectScript via stdin
+        env_proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "exec", "--ns", "%SYS", "--stdin"],
+            input='W $NAMESPACE,!',
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(SRC)},
+            timeout=60,
+        )
+        assert env_proc.returncode == 0, env_proc.stderr
+        env = json.loads(env_proc.stdout)
+        assert env["ok"] is True
+        assert "%SYS" in env["data"]["output"]
+
+    def test_sql_inline(self, live_iris):
+        env = _cli("sql", "--ns", "USER", "SELECT 1 AS one, 'hi' AS s")
+        assert env["ok"] is True
+        assert env["data"]["rowcount"] == 1
+        assert {"one", "s"} <= {c.lower() for c in env["data"]["columns"]}
+
+    def test_sql_invalid_returns_iris_error(self, live_iris):
+        # exit code 7 (iris_error) per the contract
+        proc = subprocess.run(
+            [sys.executable, "-m", "irisctl", "sql", "--ns", "USER", "SELECT FROM X"],
+            capture_output=True, text=True,
+            env={**os.environ, "PYTHONPATH": str(SRC)},
+            timeout=60,
+        )
+        assert proc.returncode == 7
+        env = json.loads(proc.stdout)
+        assert env["ok"] is False
+        assert env["error"]["code"] == "iris_error"
+
+    def test_shell_dry_run(self, live_iris):
+        env = _cli("shell", "--ns", "%SYS", "--dry-run")
+        assert env["ok"] is True
+        assert env["data"]["argv"][0] == "docker"
+        assert "iris" in env["data"]["argv"]

@@ -50,8 +50,12 @@ class TestUsage:
     def test_help_lists_subcommands(self):
         res = _run(["--help"])
         assert res.returncode == 0
+        # Phase 1
         for known in ("license", "metrics", "ports", "version", "status",
                       "logs", "health", "alerts"):
+            assert known in res.stdout
+        # Phase 2
+        for known in ("exec", "sql", "shell"):
             assert known in res.stdout
 
 
