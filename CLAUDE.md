@@ -1,3 +1,61 @@
+---
+# Machine-readable project descriptor — schema v1 (2026-05-05).
+name: irisctl
+kind: [cli, tool]
+status: archived                           # retired 2026-07-04 — superseded by vista-forge m-iris/irissync over m-driver-sdk
+languages: [python]
+
+runtime:
+  needs:
+    - python>=3.10
+    - docker
+    - "running InterSystems IRIS Community container (test target: `foia` at ~/data/foia-iris/)"
+  optional: []
+  excludes:
+    - "yottadb (use ydbctl sibling instead)"
+    - "windows (untested; assumes Linux docker)"
+
+distribution:
+  pypi: null                               # pipx skipped per Rafael 2026-05-03
+  github: rafael5/irisctl                  # private
+
+location: ~/projects/irisctl
+
+exposes:
+  cli:
+    - irisctl                              # ~30 subcommands; JSON-first output for AI agents
+  capabilities:
+    - "wraps `docker exec` + heredocs + `iris session` + host-network helpers"
+    - "license bookkeeping, HTTP probes, CSP page paths"
+    - "JSON-RPC mode for AI agents"
+  ports_known:
+    - "1972 superserver"
+    - "52773 web gateway / Mgmt Portal / /api/monitor/metrics (unauth)"
+    - "9430 RPC Broker"
+    - "8001 VistALink"
+
+consumes:
+  formats: []
+  services: ["docker daemon", "running IRIS container"]
+
+companions:
+  - project: ydbctl
+    relation: "sibling — same envelope shape and overlapping subcommands for the YottaDB Docker side"
+  - project: docker-vista-fork
+    relation: "irisctl wraps containers built from docker-vista-fork's Dockerfile (IRIS path)"
+  - project: fm-web
+    relation: "fm-web targets the IRIS-backed VistA exposed via irisctl-managed containers"
+
+incompatibilities:
+  - "IRIS-specific. YDB containers use ydbctl; the two CLIs deliberately don't overlap on backend-specific commands."
+  - "Tests require a live `foia` container — no IRIS response mocking by design."
+
+docs:
+  primary: README.md
+  surface: docs/iris-cli-surface.md
+  plan: docs/iris-cli-plan.md
+---
+
 # irisctl — Claude Project Context
 
 ## What this project is

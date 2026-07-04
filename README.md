@@ -1,5 +1,7 @@
 # irisctl
 
+> ⚠️ **ARCHIVED 2026-07-04** — retired in the `~/projects` consolidation. IRIS access now goes through the vista-forge workstream (`m-iris` + `irissync` over the `m-driver-sdk` seam), so a per-engine wrapper CLI no longer fits the architecture. Read-only; no further development.
+
 A programmer/AI-friendly CLI wrapper for InterSystems IRIS Community
 Edition Docker containers. Hides the patchwork of `docker exec`,
 heredocs, `iris session`, host-network helpers, license bookkeeping,
